@@ -153,7 +153,8 @@ class QwenImagePipeline(BasePipeline):
     def enable_vram_management(self, num_persistent_param_in_dit=None, vram_limit=None, vram_buffer=0.5, enable_dit_fp8_computation=False):
         self.vram_management_enabled = True
         if vram_limit is None:
-            vram_limit = self.get_vram()
+            #vram_limit = self.get_vram()
+            vram_limit = torch.xpu.get_device_properties().total_memory/(1024**3)
         vram_limit = vram_limit - vram_buffer
         
         if self.text_encoder is not None:
