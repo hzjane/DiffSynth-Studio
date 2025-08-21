@@ -102,7 +102,8 @@ class BasePipeline(torch.nn.Module):
                                 module.offload()
                     else:
                         model.cpu()
-            torch.cuda.empty_cache()
+            #torch.cuda.empty_cache()
+            torch.xpu.empty_cache()
             # onload models
             for name, model in self.named_children():
                 if name in model_names:

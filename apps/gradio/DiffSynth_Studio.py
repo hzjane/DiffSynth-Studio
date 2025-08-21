@@ -117,7 +117,8 @@ def load_model(model_type, model_path):
         model_manager_to_release, _ = model_dict[key]
         model_manager_to_release.to("cpu")
         del model_dict[key]
-        torch.cuda.empty_cache()
+        #torch.cuda.empty_cache()
+        torch.xpu.empty_cache()
     model_dict[model_key] = model_manager, pipe
     return model_manager, pipe
 
