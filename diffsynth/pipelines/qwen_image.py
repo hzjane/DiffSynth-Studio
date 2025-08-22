@@ -767,7 +767,9 @@ def model_fn_qwen_image(
                 controlnet_inputs=blockwise_controlnet_inputs, block_id=block_id,
                 progress_id=progress_id, num_inference_steps=num_inference_steps,
             )
-    
+
+    conditioning = conditioning.to("xpu:0")
+    image = image.to("xpu:0")
     image = dit.norm_out(image, conditioning)
     image = dit.proj_out(image)
     image = image[:, :image_seq_len]
