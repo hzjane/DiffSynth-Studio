@@ -11,7 +11,7 @@ def cast_to(weight, dtype, device):
 class AutoTorchModule(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        
+
     def check_free_vram(self):
         # gpu_mem_state = torch.cuda.mem_get_info(self.computation_device)
         # used_memory = (gpu_mem_state[1] - gpu_mem_state[0]) / (1024 ** 3)
@@ -27,7 +27,7 @@ class AutoTorchModule(torch.nn.Module):
         if self.state != 1:
             self.to(dtype=self.onload_dtype, device=self.onload_device)
             self.state = 1
-            
+
     def keep(self):
         if self.state != 2:
             self.to(dtype=self.computation_dtype, device=self.computation_device)
@@ -46,6 +46,16 @@ class AutoWrappedModule(AutoTorchModule):
         self.computation_device = computation_device
         self.vram_limit = vram_limit
         self.state = 0
+        self.name = kwargs['name']
+        if 'transformer_blocks' in self.name:
+            parts = self.name.split('.')
+            layer_index = int(parts[1])
+            if layer_index >= 30:
+                self.computation_device = 'xpu:1'
+
+    def check_free_vram(self):
+        used_memory = torch.xpu.memory_reserved(self.computation_device) / (1024 ** 3)
+        return used_memory < self.vram_limit
 
     def forward(self, *args, **kwargs):
         if self.state == 2:
@@ -59,7 +69,7 @@ class AutoWrappedModule(AutoTorchModule):
             else:
                 module = copy.deepcopy(self.module).to(dtype=self.computation_dtype, device=self.computation_device)
         return module(*args, **kwargs)
-    
+
 
 class WanAutoCastLayerNorm(torch.nn.LayerNorm, AutoTorchModule):
     def __init__(self, module: torch.nn.LayerNorm, offload_dtype, offload_device, onload_dtype, onload_device, computation_dtype, computation_device, vram_limit, **kwargs):
@@ -91,7 +101,7 @@ class WanAutoCastLayerNorm(torch.nn.LayerNorm, AutoTorchModule):
         with torch.amp.autocast(device_type=x.device.type):
             x = torch.nn.functional.layer_norm(x.float(), self.normalized_shape, weight, bias, self.eps).type_as(x)
         return x
-    
+
 
 class AutoWrappedLinear(torch.nn.Linear, AutoTorchModule):
     def __init__(self, module: torch.nn.Linear, offload_dtype, offload_device, onload_dtype, onload_device, computation_dtype, computation_device, vram_limit, name="", **kwargs):
@@ -112,7 +122,16 @@ class AutoWrappedLinear(torch.nn.Linear, AutoTorchModule):
         self.lora_B_weights = []
         self.lora_merger = None
         self.enable_fp8 = computation_dtype in [torch.float8_e4m3fn, torch.float8_e4m3fnuz]
-        
+        if 'transformer_blocks' in self.name:
+            parts = self.name.split('.')
+            layer_index = int(parts[1])
+            if layer_index >= 30:
+                self.computation_device = 'xpu:1'
+
+    def check_free_vram(self):
+        used_memory = torch.xpu.memory_reserved(self.computation_device) / (1024 ** 3)
+        return used_memory < self.vram_limit
+
     def fp8_linear(
         self,
         input: torch.Tensor,
@@ -152,6 +171,7 @@ class AutoWrappedLinear(torch.nn.Linear, AutoTorchModule):
         return result
 
     def forward(self, x, *args, **kwargs):
+        x = x.to(self.computation_device)
         # VRAM management
         if self.state == 2:
             weight, bias = self.weight, self.bias
@@ -164,13 +184,13 @@ class AutoWrappedLinear(torch.nn.Linear, AutoTorchModule):
             else:
                 weight = cast_to(self.weight, self.computation_dtype, self.computation_device)
                 bias = None if self.bias is None else cast_to(self.bias, self.computation_dtype, self.computation_device)
-        
+
         # Linear forward
         if self.enable_fp8:
             out = self.fp8_linear(x, weight, bias)
         else:
             out = torch.nn.functional.linear(x, weight, bias)
-        
+
         # LoRA
         if len(self.lora_A_weights) == 0:
             # No LoRA
@@ -211,4 +231,3 @@ def enable_vram_management_recursively(model: torch.nn.Module, module_map: dict,
 def enable_vram_management(model: torch.nn.Module, module_map: dict, module_config: dict, max_num_param=None, overflow_module_config: dict = None, vram_limit=None):
     enable_vram_management_recursively(model, module_map, module_config, max_num_param, overflow_module_config, total_num_param=0, vram_limit=vram_limit)
     model.vram_management_enabled = True
-

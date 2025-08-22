@@ -77,7 +77,7 @@ class QwenEmbedRope(nn.Module):
         ], dim=1)
         self.rope_cache = {}
         self.scale_rope = scale_rope
-        
+
     def rope_params(self, index, dim, theta=10000):
         """
             Args:
@@ -293,10 +293,13 @@ class QwenDoubleStreamAttention(nn.Module):
         txt_v = rearrange(txt_v, 'b s (h d) -> b h s d', h=self.num_heads)
 
         img_q, img_k = self.norm_q(img_q), self.norm_k(img_k)
+        device = img_q.device
         txt_q, txt_k = self.norm_added_q(txt_q), self.norm_added_k(txt_k)
-        
+
         if image_rotary_emb is not None:
             img_freqs, txt_freqs = image_rotary_emb
+            img_freqs = img_freqs.to(device)
+            txt_freqs = txt_freqs.to(device)
             img_q = apply_rotary_emb_qwen(img_q, img_freqs)
             img_k = apply_rotary_emb_qwen(img_k, img_freqs)
             txt_q = apply_rotary_emb_qwen(txt_q, txt_freqs)
@@ -319,21 +322,21 @@ class QwenDoubleStreamAttention(nn.Module):
 
 class QwenImageTransformerBlock(nn.Module):
     def __init__(
-        self, 
-        dim: int, 
-        num_attention_heads: int, 
-        attention_head_dim: int, 
+        self,
+        dim: int,
+        num_attention_heads: int,
+        attention_head_dim: int,
         eps: float = 1e-6,
-    ):    
+    ):
         super().__init__()
-        
+
         self.dim = dim
         self.num_attention_heads = num_attention_heads
         self.attention_head_dim = attention_head_dim
 
         self.img_mod = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(dim, 6 * dim), 
+            nn.Linear(dim, 6 * dim),
         )
         self.img_norm1 = nn.LayerNorm(dim, elementwise_affine=False, eps=eps)
         self.attn = QwenDoubleStreamAttention(
@@ -347,21 +350,21 @@ class QwenImageTransformerBlock(nn.Module):
 
         self.txt_mod = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(dim, 6 * dim, bias=True), 
+            nn.Linear(dim, 6 * dim, bias=True),
         )
         self.txt_norm1 = nn.LayerNorm(dim, elementwise_affine=False, eps=eps)
         self.txt_norm2 = nn.LayerNorm(dim, elementwise_affine=False, eps=eps)
         self.txt_mlp = QwenFeedForward(dim=dim, dim_out=dim)
-    
+
     def _modulate(self, x, mod_params):
         shift, scale, gate = mod_params.chunk(3, dim=-1)
-        return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1), gate.unsqueeze(1)    
+        return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1), gate.unsqueeze(1)
 
     def forward(
         self,
-        image: torch.Tensor,  
+        image: torch.Tensor,
         text: torch.Tensor,
-        temb: torch.Tensor, 
+        temb: torch.Tensor,
         image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         attention_mask: Optional[torch.Tensor] = None,
         enable_fp8_attention = False,
@@ -369,11 +372,15 @@ class QwenImageTransformerBlock(nn.Module):
 
         img_mod_attn, img_mod_mlp = self.img_mod(temb).chunk(2, dim=-1)  # [B, 3*dim] each
         txt_mod_attn, txt_mod_mlp = self.txt_mod(temb).chunk(2, dim=-1)  # [B, 3*dim] each
+        device = img_mod_attn.device
 
-        img_normed = self.img_norm1(image)
+        img_normed = self.img_norm1(image).to(device)
+        image = image.to(device)
+        text = text.to(device)
+        temb = temb.to(device)
         img_modulated, img_gate = self._modulate(img_normed, img_mod_attn)
 
-        txt_normed = self.txt_norm1(text)
+        txt_normed = self.txt_norm1(text).to(device)
         txt_modulated, txt_gate = self._modulate(txt_normed, txt_mod_attn)
 
         img_attn_out, txt_attn_out = self.attn(
@@ -383,14 +390,16 @@ class QwenImageTransformerBlock(nn.Module):
             attention_mask=attention_mask,
             enable_fp8_attention=enable_fp8_attention,
         )
-        
+        img_attn_out = img_attn_out.to(device)
+        txt_attn_out = txt_attn_out.to(device)
+
         image = image + img_gate * img_attn_out
         text = text + txt_gate * txt_attn_out
 
-        img_normed_2 = self.img_norm2(image)
+        img_normed_2 = self.img_norm2(image).to(device)
         img_modulated_2, img_gate_2 = self._modulate(img_normed_2, img_mod_mlp)
 
-        txt_normed_2 = self.txt_norm2(text)
+        txt_normed_2 = self.txt_norm2(text).to(device)
         txt_modulated_2, txt_gate_2 = self._modulate(txt_normed_2, txt_mod_mlp)
 
         img_mlp_out = self.img_mlp(img_modulated_2)
@@ -409,7 +418,7 @@ class QwenImageDiT(torch.nn.Module):
     ):
         super().__init__()
 
-        self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=[16,56,56], scale_rope=True) 
+        self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=[16,56,56], scale_rope=True)
 
         self.time_text_embed = TimestepEmbeddings(256, 3072, diffusers_compatible_format=True, scale=1000, align_dtype_to_timestep=True)
         self.txt_norm = RMSNorm(3584, eps=1e-6)
@@ -510,7 +519,7 @@ class QwenImageDiT(torch.nn.Module):
     ):
         img_shapes = [(latents.shape[0], latents.shape[2]//2, latents.shape[3]//2)]
         txt_seq_lens = prompt_emb_mask.sum(dim=1).tolist()
-        
+
         image = rearrange(latents, "B C (H P) (W Q) -> B (H W) (C P Q)", H=height//16, W=width//16, P=2, Q=2)
         image = self.img_in(image)
         text = self.txt_in(self.txt_norm(prompt_emb))
@@ -526,13 +535,13 @@ class QwenImageDiT(torch.nn.Module):
                 temb=conditioning,
                 image_rotary_emb=image_rotary_emb,
             )
-        
+
         image = self.norm_out(image, conditioning)
         image = self.proj_out(image)
-        
+
         latents = rearrange(image, "B (H W) (C P Q) -> B C (H P) (W Q)", H=height//16, W=width//16, P=2, Q=2)
         return image
-    
+
     @staticmethod
     def state_dict_converter():
         return QwenImageDiTStateDictConverter()
