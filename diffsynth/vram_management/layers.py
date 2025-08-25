@@ -1,4 +1,4 @@
-import torch, copy
+import torch, copy, os
 from ..models.utils import init_weights_on_device
 
 
@@ -47,11 +47,12 @@ class AutoWrappedModule(AutoTorchModule):
         self.vram_limit = vram_limit
         self.state = 0
         self.name = kwargs['name']
-        if 'transformer_blocks' in self.name:
-            parts = self.name.split('.')
-            layer_index = int(parts[1])
-            if layer_index >= 30:
-                self.computation_device = 'xpu:1'
+        if os.getenv("qwen_image_enable_two_card", "None") is not None:
+            if 'transformer_blocks' in self.name:
+                parts = self.name.split('.')
+                layer_index = int(parts[1])
+                if layer_index >= 30:
+                    self.computation_device = 'xpu:1'
 
     def check_free_vram(self):
         used_memory = torch.xpu.memory_reserved(self.computation_device) / (1024 ** 3)
@@ -122,11 +123,12 @@ class AutoWrappedLinear(torch.nn.Linear, AutoTorchModule):
         self.lora_B_weights = []
         self.lora_merger = None
         self.enable_fp8 = computation_dtype in [torch.float8_e4m3fn, torch.float8_e4m3fnuz]
-        if 'transformer_blocks' in self.name:
-            parts = self.name.split('.')
-            layer_index = int(parts[1])
-            if layer_index >= 30:
-                self.computation_device = 'xpu:1'
+        if os.getenv("qwen_image_enable_two_card", "None") is not None:
+            if 'transformer_blocks' in self.name:
+                parts = self.name.split('.')
+                layer_index = int(parts[1])
+                if layer_index >= 30:
+                    self.computation_device = 'xpu:1'
 
     def check_free_vram(self):
         used_memory = torch.xpu.memory_reserved(self.computation_device) / (1024 ** 3)
