@@ -47,7 +47,7 @@ class AutoWrappedModule(AutoTorchModule):
         self.vram_limit = vram_limit
         self.state = 0
         self.name = kwargs['name']
-        if os.getenv("qwen_image_enable_two_card", "None") is not None:
+        if os.getenv("qwen_image_enable_two_card", None) is not None:
             if 'transformer_blocks' in self.name:
                 parts = self.name.split('.')
                 layer_index = int(parts[1])
@@ -123,7 +123,7 @@ class AutoWrappedLinear(torch.nn.Linear, AutoTorchModule):
         self.lora_B_weights = []
         self.lora_merger = None
         self.enable_fp8 = computation_dtype in [torch.float8_e4m3fn, torch.float8_e4m3fnuz]
-        if os.getenv("qwen_image_enable_two_card", "None") is not None:
+        if os.getenv("qwen_image_enable_two_card", None) is not None:
             if 'transformer_blocks' in self.name:
                 parts = self.name.split('.')
                 layer_index = int(parts[1])
